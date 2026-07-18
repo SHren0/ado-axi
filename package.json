@@ -1,0 +1,57 @@
+{
+  "name": "ado-axi",
+  "version": "0.1.0",
+  "description": "AXI-compliant az devops CLI wrapper - token-efficient TOON output, contextual suggestions, idempotent mutations",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samhren/ado-axi.git"
+  },
+  "keywords": [
+    "azure-devops",
+    "ado",
+    "cli",
+    "agent",
+    "axi",
+    "toon"
+  ],
+  "bin": {
+    "ado-axi": "./dist/bin/ado-axi.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx bin/ado-axi.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@toon-format/toon": "^2.3.1",
+    "axi-sdk-js": "^0.1.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.1",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.5",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^3.2.7"
+  }
+}
