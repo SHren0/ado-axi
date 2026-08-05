@@ -95,6 +95,38 @@ const table: SuggestionEntry[] = [
     match: (c) => c.domain === "pr" && c.action === "review",
     lines: (c) => [`Run \`ado-axi pr view ${c.id}\` to see the pull request`],
   },
+  {
+    match: (c) => c.domain === "pr" && c.action === "reviewers" && c.isEmpty === true,
+    lines: (c) => [`Run \`ado-axi pr add-reviewer ${c.id} --reviewers <email>\` to add a reviewer`],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "reviewers",
+    lines: (c) => [`Run \`ado-axi pr add-reviewer ${c.id} --reviewers <email>\` to add another reviewer`],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "add-reviewer",
+    lines: (c) => [`Run \`ado-axi pr reviewers ${c.id}\` to see all reviewers`],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "remove-reviewer",
+    lines: (c) => [`Run \`ado-axi pr reviewers ${c.id}\` to see remaining reviewers`],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "work-items" && c.isEmpty === true,
+    lines: (c) => [`Run \`ado-axi pr link-work-item ${c.id} --work-items <id>\` to link a work item`],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "work-items",
+    lines: () => ["Run `ado-axi work-item view <id>` to see a linked work item's details"],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "link-work-item",
+    lines: (c) => [`Run \`ado-axi pr work-items ${c.id}\` to see all linked work items`],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "unlink-work-item",
+    lines: (c) => [`Run \`ado-axi pr work-items ${c.id}\` to see remaining linked work items`],
+  },
 
   // pipeline
   {
