@@ -21,7 +21,14 @@ import {
 
 interface Reviewer {
   displayName?: string;
+  uniqueName?: string;
   vote?: number;
+  isRequired?: boolean;
+}
+
+interface WorkItemRef {
+  id?: string | number;
+  url?: string;
 }
 
 interface PrItem {
@@ -64,6 +71,25 @@ function reviewSummary(reviewers: Reviewer[] | undefined): string {
   return parts.join(", ");
 }
 
+function reviewerNames(reviewers: Reviewer[] | undefined): string {
+  if (!reviewers || reviewers.length === 0) return "none";
+  return reviewers
+    .map((r) => {
+      const name = r.displayName ?? r.uniqueName ?? "unknown";
+      const vote = VOTE_LABELS[r.vote ?? 0] ?? "no_vote";
+      return r.isRequired ? `${name} (${vote}, required)` : `${name} (${vote})`;
+    })
+    .join(", ");
+}
+
+const reviewerSchema: FieldDef[] = [
+  custom("reviewer", (r: Reviewer) => r.displayName ?? r.uniqueName ?? "unknown"),
+  custom("vote", (r: Reviewer) => VOTE_LABELS[r.vote ?? 0] ?? "no_vote"),
+  boolYesNo("isRequired", "required"),
+];
+
+const workItemRefSchema: FieldDef[] = [field("id"), field("url")];
+
 const listSchema: FieldDef[] = [
   custom("id", (i: PrItem) => i.pullRequestId),
   field("title"),
@@ -81,6 +107,7 @@ const viewSchema: FieldDef[] = [
   custom("source", (i: PrItem) => (i.sourceRefName ?? "").replace(/^refs\/heads\//, "")),
   custom("target", (i: PrItem) => (i.targetRefName ?? "").replace(/^refs\/heads\//, "")),
   custom("reviewers", (i: PrItem) => reviewSummary(i.reviewers)),
+  custom("reviewer_names", (i: PrItem) => reviewerNames(i.reviewers)),
   custom("description", (i: PrItem) => truncateBody(i.description)),
 ];
 
@@ -91,8 +118,8 @@ const viewSchemaFull: FieldDef[] = viewSchema.map((f) =>
 );
 
 export const PR_HELP = `usage: ado-axi pr <subcommand> [flags]
-subcommands[5]:
-  list, view <id>, create, complete <id>, review <id>
+subcommands[11]:
+  list, view <id>, create, complete <id>, review <id>, reviewers <id>, add-reviewer <id>, remove-reviewer <id>, work-items <id>, link-work-item <id>, unlink-work-item <id>
 flags{list}:
   --status <active|completed|abandoned|all> (default active), --repository <name>, --creator <email>, --reviewer <email>, --source-branch <name>, --target-branch <name>, --top <n> (default 50)
 flags{view}:
@@ -103,12 +130,22 @@ flags{complete}:
   --squash, --delete-source-branch, --bypass-policy, --merge-commit-message <text>
 flags{review}:
   --approve, --reject, --wait, --approve-with-suggestions, --reset
+flags{add-reviewer}:
+  --reviewers <email> (required, repeatable), --required (mark as a required reviewer)
+flags{remove-reviewer}:
+  --reviewers <email> (required, repeatable)
+flags{link-work-item}:
+  --work-items <id> (required, repeatable)
+flags{unlink-work-item}:
+  --work-items <id> (required, repeatable)
 examples:
   ado-axi pr list --status active
   ado-axi pr view 42
   ado-axi pr create --title "Fix login" --source-branch feature/login --target-branch main
   ado-axi pr complete 42 --squash --delete-source-branch
-  ado-axi pr review 42 --approve`;
+  ado-axi pr review 42 --approve
+  ado-axi pr add-reviewer 42 --reviewers alice@contoso.com --required
+  ado-axi pr link-work-item 42 --work-items 14555`;
 
 async function prList(args: string[], ctx?: AdoContext): Promise<string> {
   const status = takeFlag(args, "--status") ?? "active";
@@ -282,6 +319,144 @@ async function prReview(args: string[], ctx?: AdoContext): Promise<string> {
   ]);
 }
 
+async function prReviewers(args: string[], ctx?: AdoContext): Promise<string> {
+  const id = takeNumber(args, "PR");
+
+  const result = await azJson<Reviewer[]>(
+    withOrgProject(["repos", "pr", "reviewer", "list", "--id", String(id)], ctx, {
+      project: false,
+    }),
+  );
+  const reviewers = Array.isArray(result) ? result : [];
+  const isEmpty = reviewers.length === 0;
+
+  return renderOutput([
+    isEmpty ? "count: 0 reviewers" : `count: ${reviewers.length}`,
+    isEmpty ? "" : renderList("reviewers", reviewers, reviewerSchema),
+    renderHelp(getSuggestions({ domain: "pr", action: "reviewers", id, isEmpty, ctx })),
+  ]);
+}
+
+async function prAddReviewer(args: string[], ctx?: AdoContext): Promise<string> {
+  const required = takeBoolFlag(args, "--required");
+  const id = takeNumber(args, "PR");
+  const reviewers = takeAllFlags(args, "--reviewers");
+  if (reviewers.length === 0) {
+    throw new AxiError("--reviewers is required (repeatable)", "VALIDATION_ERROR", [
+      "Pass --reviewers <email> once per reviewer to add",
+    ]);
+  }
+
+  const azArgs = ["repos", "pr", "reviewer", "add", "--id", String(id), "--reviewers", ...reviewers];
+  if (required) azArgs.push("--required", "true");
+  await azJson(withOrgProject(azArgs, ctx, { project: false }));
+
+  return renderOutput([
+    renderDetail("reviewers_added", { id, reviewers: reviewers.join(", "), required }, [
+      custom("id", (i: { id: number }) => i.id),
+      custom("reviewers", (i: { reviewers: string }) => i.reviewers),
+      boolYesNo("required"),
+    ]),
+    renderHelp(getSuggestions({ domain: "pr", action: "add-reviewer", id, ctx })),
+  ]);
+}
+
+async function prRemoveReviewer(args: string[], ctx?: AdoContext): Promise<string> {
+  const id = takeNumber(args, "PR");
+  const reviewers = takeAllFlags(args, "--reviewers");
+  if (reviewers.length === 0) {
+    throw new AxiError("--reviewers is required (repeatable)", "VALIDATION_ERROR", [
+      "Pass --reviewers <email> once per reviewer to remove",
+    ]);
+  }
+
+  await azJson(
+    withOrgProject(
+      ["repos", "pr", "reviewer", "remove", "--id", String(id), "--reviewers", ...reviewers],
+      ctx,
+      { project: false },
+    ),
+  );
+
+  return renderOutput([
+    renderDetail("reviewers_removed", { id, reviewers: reviewers.join(", ") }, [
+      custom("id", (i: { id: number }) => i.id),
+      custom("reviewers", (i: { reviewers: string }) => i.reviewers),
+    ]),
+    renderHelp(getSuggestions({ domain: "pr", action: "remove-reviewer", id, ctx })),
+  ]);
+}
+
+async function prWorkItems(args: string[], ctx?: AdoContext): Promise<string> {
+  const id = takeNumber(args, "PR");
+
+  const result = await azJson<WorkItemRef[]>(
+    withOrgProject(["repos", "pr", "work-item", "list", "--id", String(id)], ctx, {
+      project: false,
+    }),
+  );
+  const items = Array.isArray(result) ? result : [];
+  const isEmpty = items.length === 0;
+
+  return renderOutput([
+    isEmpty ? "count: 0 linked work items" : `count: ${items.length}`,
+    isEmpty ? "" : renderList("work_items", items, workItemRefSchema),
+    renderHelp(getSuggestions({ domain: "pr", action: "work-items", id, isEmpty, ctx })),
+  ]);
+}
+
+async function prLinkWorkItem(args: string[], ctx?: AdoContext): Promise<string> {
+  const id = takeNumber(args, "PR");
+  const workItems = takeAllFlags(args, "--work-items");
+  if (workItems.length === 0) {
+    throw new AxiError("--work-items is required (repeatable)", "VALIDATION_ERROR", [
+      "Pass --work-items <id> once per work item to link",
+    ]);
+  }
+
+  await azJson(
+    withOrgProject(
+      ["repos", "pr", "work-item", "add", "--id", String(id), "--work-items", ...workItems],
+      ctx,
+      { project: false },
+    ),
+  );
+
+  return renderOutput([
+    renderDetail("work_items_linked", { id, workItems: workItems.join(", ") }, [
+      custom("id", (i: { id: number }) => i.id),
+      custom("work_items", (i: { workItems: string }) => i.workItems),
+    ]),
+    renderHelp(getSuggestions({ domain: "pr", action: "link-work-item", id, ctx })),
+  ]);
+}
+
+async function prUnlinkWorkItem(args: string[], ctx?: AdoContext): Promise<string> {
+  const id = takeNumber(args, "PR");
+  const workItems = takeAllFlags(args, "--work-items");
+  if (workItems.length === 0) {
+    throw new AxiError("--work-items is required (repeatable)", "VALIDATION_ERROR", [
+      "Pass --work-items <id> once per work item to unlink",
+    ]);
+  }
+
+  await azJson(
+    withOrgProject(
+      ["repos", "pr", "work-item", "remove", "--id", String(id), "--work-items", ...workItems],
+      ctx,
+      { project: false },
+    ),
+  );
+
+  return renderOutput([
+    renderDetail("work_items_unlinked", { id, workItems: workItems.join(", ") }, [
+      custom("id", (i: { id: number }) => i.id),
+      custom("work_items", (i: { workItems: string }) => i.workItems),
+    ]),
+    renderHelp(getSuggestions({ domain: "pr", action: "unlink-work-item", id, ctx })),
+  ]);
+}
+
 function voteValue(vote: string): number {
   switch (vote) {
     case "approve":
@@ -312,6 +487,18 @@ export async function prCommand(args: string[], ctx?: AdoContext): Promise<strin
       return prComplete(rest, ctx);
     case "review":
       return prReview(rest, ctx);
+    case "reviewers":
+      return prReviewers(rest, ctx);
+    case "add-reviewer":
+      return prAddReviewer(rest, ctx);
+    case "remove-reviewer":
+      return prRemoveReviewer(rest, ctx);
+    case "work-items":
+      return prWorkItems(rest, ctx);
+    case "link-work-item":
+      return prLinkWorkItem(rest, ctx);
+    case "unlink-work-item":
+      return prUnlinkWorkItem(rest, ctx);
     case "--help":
     case "-h":
     case "help":
