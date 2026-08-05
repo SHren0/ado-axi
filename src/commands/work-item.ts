@@ -22,6 +22,31 @@ interface WorkItemRaw {
   url?: string;
 }
 
+interface WorkItemCommentRaw {
+  id?: number;
+  text?: string;
+  createdDate?: string;
+  modifiedDate?: string;
+  createdBy?: unknown;
+  modifiedBy?: unknown;
+}
+
+interface WorkItemCommentsResponse {
+  comments?: WorkItemCommentRaw[];
+  continuation_token?: string | null;
+  continuationToken?: string | null;
+}
+
+interface WorkItemView extends WorkItemRaw {
+  discussion?: Array<{
+    id: number | null;
+    author: string;
+    createdDate: string;
+    modifiedDate: string;
+    text: string;
+  }>;
+}
+
 function wiField(item: WorkItemRaw, key: string): unknown {
   return item.fields?.[key] ?? (item as unknown as Record<string, unknown>)[key] ?? null;
 }
@@ -32,6 +57,62 @@ function wiPerson(value: unknown): string {
     return person.displayName ?? person.uniqueName ?? "unassigned";
   }
   return typeof value === "string" && value.length > 0 ? value : "unassigned";
+}
+
+function workItemProject(item: WorkItemRaw, ctx?: AdoContext): string | undefined {
+  if (ctx?.project?.value) return ctx.project.value;
+  const match = item.url?.match(/\/(?:dev\.azure\.com\/[^/]+|[^/]+\.visualstudio\.com)\/([^/]+)\/_apis\//i);
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
+
+async function fetchWorkItemDiscussion(
+  item: WorkItemRaw,
+  id: number,
+  ctx?: AdoContext,
+): Promise<NonNullable<WorkItemView["discussion"]>> {
+  const project = workItemProject(item, ctx);
+  if (!project) {
+    throw new AxiError(
+      "Could not resolve the Azure DevOps project required to retrieve work-item discussion",
+      "ORG_NOT_CONFIGURED",
+      ["Pass --project <name> or configure ADO_AXI_PROJECT"],
+    );
+  }
+
+  const comments: NonNullable<WorkItemView["discussion"]> = [];
+  let continuationToken: string | undefined;
+  do {
+    const routeParameters = [`project=${project}`, `workItemId=${id}`];
+    const queryParameters = ["$top=200"];
+    if (continuationToken) queryParameters.push(`continuationToken=${continuationToken}`);
+    const response = await azJson<WorkItemCommentsResponse>(withOrgProject([
+      "devops",
+      "invoke",
+      "--area",
+      "wit",
+      "--resource",
+      "comments",
+      "--route-parameters",
+      ...routeParameters,
+      "--query-parameters",
+      ...queryParameters,
+      "--api-version",
+      "7.1-preview",
+      "--http-method",
+      "GET",
+    ], ctx, { project: false }));
+    for (const comment of response?.comments ?? []) {
+      comments.push({
+        id: comment.id ?? null,
+        author: wiPerson(comment.createdBy),
+        createdDate: String(comment.createdDate ?? ""),
+        modifiedDate: String(comment.modifiedDate ?? comment.createdDate ?? ""),
+        text: String(comment.text ?? ""),
+      });
+    }
+    continuationToken = response?.continuation_token ?? response?.continuationToken ?? undefined;
+  } while (continuationToken);
+  return comments;
 }
 
 const idField = custom("id", (item: WorkItemRaw) => item.id);
@@ -69,9 +150,13 @@ const viewSchema: FieldDef[] = [
     const tags = wiField(item, "System.Tags");
     return typeof tags === "string" && tags.length > 0 ? tags : "none";
   }),
+  custom("acceptanceCriteria", (item: WorkItemRaw) =>
+    wiField(item, "Microsoft.VSTS.Common.AcceptanceCriteria"),
+  ),
   custom("description", (item: WorkItemRaw) =>
     truncateBody(wiField(item, "System.Description")),
   ),
+  custom("discussion", (item: WorkItemView) => item.discussion ?? []),
 ];
 
 const viewSchemaFull: FieldDef[] = viewSchema.map((f) =>
@@ -165,9 +250,10 @@ async function workItemView(args: string[], ctx?: AdoContext): Promise<string> {
     project: false,
   });
   const item = await azJson<WorkItemRaw>(azArgs);
+  const discussion = await fetchWorkItemDiscussion(item, id, ctx);
 
   return renderOutput([
-    renderDetail("work_item", item, full ? viewSchemaFull : viewSchema),
+    renderDetail("work_item", { ...item, discussion }, full ? viewSchemaFull : viewSchema),
     renderHelp(getSuggestions({ domain: "work-item", action: "view", id, ctx })),
   ]);
 }

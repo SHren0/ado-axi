@@ -76,6 +76,41 @@ describe("CLI entrypoint", () => {
     expect(mockedExecFile).not.toHaveBeenCalled();
   });
 
+  it("includes the dedicated acceptance criteria field in work-item details", async () => {
+    mockedExecFile
+      .mockImplementationOnce((_cmd, _args, _opts, callback) => {
+        (callback as ExecFileCallback)(null, JSON.stringify({
+          id: 16048,
+          fields: {
+            "System.Title": "Preview workflow",
+            "Microsoft.VSTS.Common.AcceptanceCriteria": "A preview step is available.",
+            "System.Description": "<p>Work item description.</p>",
+          },
+          url: "https://dev.azure.com/contoso/AI/_apis/wit/workItems/16048",
+        }), "");
+        return {} as ReturnType<typeof execFile>;
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, callback) => {
+        (callback as ExecFileCallback)(null, JSON.stringify({
+          comments: [{
+            id: 1,
+            createdBy: { displayName: "Ada Lovelace" },
+            createdDate: "2026-08-05T10:00:00Z",
+            text: "<p>Review this flow.</p>",
+          }],
+          continuation_token: null,
+        }), "");
+        return {} as ReturnType<typeof execFile>;
+      });
+    const output = createStdout();
+    await main({ argv: ["work-item", "view", "16048", "--full"], stdout: output.stdout });
+    const rendered = output.read();
+    expect(rendered).toContain("acceptanceCriteria");
+    expect(rendered).toContain("A preview step is available.");
+    expect(rendered).toContain("discussion");
+    expect(rendered).toContain("Review this flow.");
+  });
+
   it("exits 2 for an unknown top-level command", async () => {
     const output = createStdout();
     await main({ argv: ["frobnicate"], stdout: output.stdout });
