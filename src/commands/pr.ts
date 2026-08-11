@@ -57,6 +57,10 @@ import {
   voteLabel,
   type ThreadView,
 } from "./pr-format.js";
+import {
+  aggregatePullRequestGate,
+  type GateResource,
+} from "./pr-gate.js";
 
 interface Reviewer {
   displayName?: string;
@@ -123,14 +127,16 @@ const DEFAULT_COMMIT_LIMIT = 100;
 const DEFAULT_FILE_LIMIT = 200;
 
 export const PR_HELP = `usage: ado-axi pr <subcommand> [flags]
-subcommands[19]:
-  list, view <id>, inspect <id>, create, update <id>, comment <id>, threads <id>, thread list|resolve|reply <id>, checks <id>, commits <id>, files <id>, complete <id>, review <id>, reviewers <id>, add-reviewer <id>, remove-reviewer <id>, work-items <id>, link-work-item <id>, unlink-work-item <id>
+subcommands[21]:
+  list, view <id>, inspect <id>, gate <id>, create, update <id>, comment <id>, threads <id>, thread list|resolve|reply <id>, checks <id>, commits <id>, files <id>, complete <id>, auto-complete <id>, review <id>, reviewers <id>, add-reviewer <id>, remove-reviewer <id>, work-items <id>, link-work-item <id>, unlink-work-item <id>
 flags{list}:
   --status <active|completed|abandoned|all> (default active), --repository <name>, --creator <email>, --reviewer <email>, --source-branch <name>, --target-branch <name>, --top <n> (default 50)
 flags{view}:
   --full (complete description, no truncation)
 flags{inspect}:
   --full (complete description and comment text), --json (raw JSON, exact Unicode), --include-system (keep Azure-generated threads), --commit-limit <n> (default 100), --file-limit <n> (default 200)
+flags{gate}:
+  --json (machine-readable gate contract with raw Azure status, policy, and thread data)
 flags{create}:
   --title <text> (required), --source-branch <name> (required), --target-branch <name> (required), --repository <name>, --description <text> or --description-file <path>, --draft, --work-items <id> (repeatable), --required-reviewers <email> (repeatable)
 flags{update}:
@@ -151,6 +157,8 @@ flags{files}:
   --limit <n> (default 200)
 flags{complete}:
   --squash, --delete-source-branch, --bypass-policy, --merge-commit-message <text>
+flags{auto-complete}:
+  (enables Azure auto-complete and verifies it was set; does not merge immediately)
 flags{review}:
   --approve, --reject, --wait, --approve-with-suggestions, --reset
 flags{add-reviewer}:
@@ -163,6 +171,8 @@ flags{unlink-work-item}:
   --work-items <id> (required, repeatable)
 examples:
   ado-axi pr inspect 2613 --full
+  ado-axi pr gate 2613 --json
+  ado-axi pr auto-complete 2613
   ado-axi pr threads 2613 --unresolved
   ado-axi pr update 2613 --description-file ./description.md --dry-run
   ado-axi pr thread resolve 2613 --thread-id 98765
@@ -306,6 +316,88 @@ async function prInspect(args: string[], ctx?: AdoContext): Promise<string> {
     warnings.length > 0 ? renderBlock("warnings", warnings) : "",
     renderHelp(getSuggestions({ domain: "pr", action: "inspect", id, state: pr.status, ctx })),
   ]);
+}
+
+async function prGate(args: string[], ctx?: AdoContext): Promise<string> {
+  const asJson = takeBoolFlag(args, "--json");
+  const id = takeNumber(args, "PR");
+  const operation = "pr gate";
+  const pr = await getPullRequest(id, ctx, operation);
+  const coords = await coordinatesFor(pr, ctx, operation);
+
+  const policiesPromise = coords.projectId
+    ? listPolicyEvaluations(coords, ctx, operation)
+    : Promise.reject(
+        new AxiError(
+          "Project id is unavailable; blocking policy evaluations cannot be verified",
+          "PROJECT_NOT_CONFIGURED",
+          ["Use a pull request response that includes its project id, or pass --project <name-or-id>"],
+        ),
+      );
+  const [threadsResult, checksResult, policiesResult] = await Promise.allSettled([
+    listThreads(coords, ctx, operation),
+    listStatuses(coords, ctx, operation),
+    policiesPromise,
+  ]);
+  const gate = aggregatePullRequestGate(
+    pr,
+    resourceFromSettled(checksResult),
+    resourceFromSettled(policiesResult),
+    resourceFromSettled(threadsResult),
+  );
+
+  if (asJson) return `${JSON.stringify(gate, null, 2)}\n`;
+
+  return renderOutput([
+    renderBlock("gate", {
+      id,
+      state: gate.state,
+      ready_for_auto_complete: gate.ready_for_auto_complete,
+      reasons: gate.reasons,
+    }),
+    renderBlock("pull_request", gate.pull_request),
+    renderBlock("checks", {
+      state: gate.checks.state,
+      succeeded: gate.checks.succeeded,
+      pending: gate.checks.pending,
+      failed: gate.checks.failed,
+      unknown: gate.checks.unknown,
+    }),
+    renderBlock("policies", {
+      state: gate.policies.state,
+      blocking: gate.policies.blocking,
+      passed: gate.policies.passed,
+      pending: gate.policies.pending,
+      failed: gate.policies.failed,
+      unknown: gate.policies.unknown,
+      available: gate.policies.available,
+    }),
+    renderBlock("review_threads", {
+      state: gate.threads.state,
+      unresolved: gate.threads.unresolved,
+    }),
+    renderBlock("required_reviewers", {
+      state: gate.reviewers.state,
+      required: gate.reviewers.required,
+      approved: gate.reviewers.approved,
+      pending: gate.reviewers.pending,
+      rejected: gate.reviewers.rejected,
+    }),
+    renderBlock("auto_complete", gate.auto_complete),
+    renderHelp(getSuggestions({ domain: "pr", action: "gate", id, state: gate.state, ctx })),
+  ]);
+}
+
+function resourceFromSettled<T>(result: PromiseSettledResult<T[]>): GateResource<T> {
+  if (result.status === "fulfilled") {
+    return { available: true, items: result.value };
+  }
+  const reason = result.reason;
+  return {
+    available: false,
+    items: [],
+    error: reason instanceof Error ? reason.message : String(reason),
+  };
 }
 
 /** Render a labelled collection, or a definitive empty line when there is nothing to show. */
@@ -759,6 +851,11 @@ async function prCreate(args: string[], ctx?: AdoContext): Promise<string> {
 }
 
 async function prComplete(args: string[], ctx?: AdoContext): Promise<string> {
+  if (args.some((arg) => arg === "--auto-complete" || arg.startsWith("--auto-complete="))) {
+    throw new AxiError("Use `ado-axi pr auto-complete <id>` to request auto-complete", "VALIDATION_ERROR", [
+      "`pr complete` performs an intentional immediate merge and does not accept --auto-complete",
+    ]);
+  }
   const squash = takeBoolFlag(args, "--squash");
   const deleteSourceBranch = takeBoolFlag(args, "--delete-source-branch");
   const bypassPolicy = takeBoolFlag(args, "--bypass-policy");
@@ -795,6 +892,57 @@ async function prComplete(args: string[], ctx?: AdoContext): Promise<string> {
     ]),
     renderHelp(getSuggestions({ domain: "pr", action: "complete", id, ctx })),
   ]);
+}
+
+async function prAutoComplete(args: string[], ctx?: AdoContext): Promise<string> {
+  const id = takeNumber(args, "PR");
+  const operation = "pr auto-complete";
+  const current = await getPullRequest(id, ctx, operation);
+  if (isAutoCompleteEnabled(current)) {
+    return renderOutput([
+      renderBlock("auto_complete", {
+        id,
+        enabled: true,
+        verified: true,
+        already: true,
+      }),
+      renderHelp(getSuggestions({ domain: "pr", action: "auto-complete", id, ctx })),
+    ]);
+  }
+
+  await azJson(
+    withOrgProject(
+      ["repos", "pr", "update", "--id", String(id), "--auto-complete", "true"],
+      ctx,
+    ),
+    {
+      operation,
+      category: "az repos pr update",
+    },
+  );
+
+  const verified = await getPullRequest(id, ctx, operation);
+  if (!isAutoCompleteEnabled(verified)) {
+    throw new AxiError(
+      `Azure DevOps did not enable auto-complete for pull request #${id}`,
+      "CONFLICT",
+      [`Run \`ado-axi pr gate ${id} --json\` to inspect the current pull request state`],
+    );
+  }
+
+  return renderOutput([
+    renderBlock("auto_complete", {
+      id,
+      enabled: true,
+      verified: true,
+      already: false,
+    }),
+    renderHelp(getSuggestions({ domain: "pr", action: "auto-complete", id, ctx })),
+  ]);
+}
+
+function isAutoCompleteEnabled(pr: PullRequest): boolean {
+  return pr.autoCompleteSetBy !== undefined && pr.autoCompleteSetBy !== null;
 }
 
 async function prReview(args: string[], ctx?: AdoContext): Promise<string> {
@@ -998,6 +1146,8 @@ export async function prCommand(args: string[], ctx?: AdoContext): Promise<strin
       return prView(rest, ctx);
     case "inspect":
       return prInspect(rest, ctx);
+    case "gate":
+      return prGate(rest, ctx);
     case "create":
       return prCreate(rest, ctx);
     case "update":
@@ -1016,6 +1166,8 @@ export async function prCommand(args: string[], ctx?: AdoContext): Promise<strin
       return prFiles(rest, ctx);
     case "complete":
       return prComplete(rest, ctx);
+    case "auto-complete":
+      return prAutoComplete(rest, ctx);
     case "review":
       return prReview(rest, ctx);
     case "reviewers":

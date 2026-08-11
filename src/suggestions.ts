@@ -98,6 +98,13 @@ const table: SuggestionEntry[] = [
     ],
   },
   {
+    match: (c) => c.domain === "pr" && c.action === "gate",
+    lines: (c) => [
+      `Run \`ado-axi pr gate ${c.id} --json\` to poll the machine-readable merge gate`,
+      `Run \`ado-axi pr auto-complete ${c.id}\` after the pre-merge gate passes`,
+    ],
+  },
+  {
     match: (c) => c.domain === "pr" && c.action === "update",
     lines: (c) => [
       `Run \`ado-axi pr inspect ${c.id}\` to confirm the pull request as it now stands`,
@@ -142,6 +149,12 @@ const table: SuggestionEntry[] = [
   {
     match: (c) => c.domain === "pr" && c.action === "complete",
     lines: (c) => [`Run \`ado-axi pr view ${c.id}\` to confirm the completed state`],
+  },
+  {
+    match: (c) => c.domain === "pr" && c.action === "auto-complete",
+    lines: (c) => [
+      `Run \`ado-axi pr gate ${c.id} --json\` to poll checks, policies, and completion`,
+    ],
   },
   {
     match: (c) => c.domain === "pr" && c.action === "review",
