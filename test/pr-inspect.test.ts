@@ -186,7 +186,9 @@ describe("pr inspect", () => {
       const version = call.args[call.args.indexOf("--api-version") + 1];
       // `7.1-preview.1` reduces to "7.1.1" in the extension's own float() pre-parse
       // and crashes it before the request is sent.
-      expect(version).toBe("7.1");
+      expect(version).toBe(
+        flagValue(call.args, "--resource") === "evaluations" ? "7.1-preview" : "7.1",
+      );
     }
   });
 

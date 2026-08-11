@@ -51,6 +51,25 @@ If one of them is unavailable - branch policies are the common case, since they 
 
 `pr view` is unchanged and still returns just the metadata header.
 
+### Poll a delivery gate and request auto-complete safely
+
+```sh
+ado-axi pr gate 2613 --json
+ado-axi pr auto-complete 2613
+```
+
+`pr gate --json` is the machine-facing contract for delivery automation. It
+aggregates the pull-request status, build/check statuses, blocking policy
+evaluations, unresolved non-system review threads, required reviewer votes, and
+Azure auto-complete state. The top-level `state` and every resource state is
+one of `passed`, `pending`, `failed`, or `unknown`; unavailable policy data is
+always `unknown`, never success. An active PR with `merge_status: succeeded`
+remains `pending` until Azure reports `status: completed`.
+
+`pr auto-complete` only requests Azure auto-complete and re-reads the PR to
+verify that Azure enabled it. `pr complete` remains the explicit immediate
+merge operation.
+
 ### Read review comments, including SonarQube findings
 
 ```sh

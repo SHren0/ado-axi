@@ -44,6 +44,7 @@ export interface PullRequest {
   targetRefName?: string;
   mergeStatus?: string;
   mergeId?: string;
+  autoCompleteSetBy?: IdentityRef | null;
   reviewers?: ReviewerRef[];
   repository?: RepositoryRef;
   url?: string;

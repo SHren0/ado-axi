@@ -122,7 +122,13 @@ export async function listThreads(
     },
     ctx,
   );
-  return Array.isArray(result) ? result : (result?.value ?? []);
+  if (Array.isArray(result)) return result;
+  if (result && Array.isArray(result.value)) return result.value;
+  throw new AxiError(
+    "Azure returned an unusable review-thread response",
+    "UNKNOWN",
+    [`Run \`ado-axi pr inspect ${coords.pullRequestId}\` to compare the raw PR data`],
+  );
 }
 
 /** Build/check statuses posted against the PR. */
@@ -141,21 +147,34 @@ export async function listStatuses(
     },
     ctx,
   );
-  return Array.isArray(result) ? result : (result?.value ?? []);
+  if (Array.isArray(result)) return result;
+  if (result && Array.isArray(result.value)) return result.value;
+  throw new AxiError(
+    "Azure returned an unusable check-status response",
+    "UNKNOWN",
+    [`Run \`ado-axi pr inspect ${coords.pullRequestId}\` to compare the raw PR data`],
+  );
 }
 
 /**
  * Branch-policy evaluations for the PR.
  *
  * The policy area addresses a PR by artifact id, which needs the project GUID -
- * not the project name - so this is skipped when Azure did not return one.
+ * not the project name - so this is an explicit data error when Azure did not
+ * return one rather than a successful-looking empty policy collection.
  */
 export async function listPolicyEvaluations(
   coords: PrCoordinates,
   ctx: AdoContext | undefined,
   operation: string,
 ): Promise<PolicyEvaluation[]> {
-  if (!coords.projectId) return [];
+  if (!coords.projectId) {
+    throw new AxiError(
+      "Could not determine the project id needed to read policy evaluations",
+      "PROJECT_NOT_CONFIGURED",
+      ["Run this command with a pull request response that includes its project id"],
+    );
+  }
 
   const result = await adoRest<{ value?: PolicyEvaluation[] } | PolicyEvaluation[]>(
     {
@@ -165,12 +184,21 @@ export async function listPolicyEvaluations(
       queryParameters: {
         artifactId: `vstfs:///CodeReview/CodeReviewId/${coords.projectId}/${coords.pullRequestId}`,
       },
+      // Policy evaluations are still preview-only. Bare 7.1-preview is valid
+      // for az devops invoke; the suffixed preview versions are not.
+      apiVersion: "7.1-preview",
       operation,
       nextCommand: `ado-axi pr checks ${coords.pullRequestId}`,
     },
     ctx,
   );
-  return Array.isArray(result) ? result : (result?.value ?? []);
+  if (Array.isArray(result)) return result;
+  if (result && Array.isArray(result.value)) return result.value;
+  throw new AxiError(
+    "Azure returned an unusable policy-evaluation response",
+    "UNKNOWN",
+    [`Run \`ado-axi pr inspect ${coords.pullRequestId}\` to compare the raw PR data`],
+  );
 }
 
 /** Commits on the PR's source branch, paginated. */
