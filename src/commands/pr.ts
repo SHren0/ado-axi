@@ -161,6 +161,8 @@ flags{auto-complete}:
   (enables Azure auto-complete and verifies it was set; does not merge immediately)
 flags{review}:
   --approve, --reject, --wait, --approve-with-suggestions, --reset
+flags{reviewers}:
+  --json (raw reviewer identities, including email fields)
 flags{add-reviewer}:
   --reviewers <email> (required, repeatable), --required (mark as a required reviewer)
 flags{remove-reviewer}:
@@ -986,6 +988,7 @@ async function prReview(args: string[], ctx?: AdoContext): Promise<string> {
 }
 
 async function prReviewers(args: string[], ctx?: AdoContext): Promise<string> {
+  const asJson = takeBoolFlag(args, "--json");
   const id = takeNumber(args, "PR");
 
   const result = await azJson<Reviewer[]>(
@@ -993,6 +996,7 @@ async function prReviewers(args: string[], ctx?: AdoContext): Promise<string> {
     { operation: "pr reviewers", category: "az repos pr reviewer list" },
   );
   const reviewers = Array.isArray(result) ? result : [];
+  if (asJson) return `${JSON.stringify(reviewers, null, 2)}\n`;
   const isEmpty = reviewers.length === 0;
 
   return renderOutput([

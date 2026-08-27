@@ -62,6 +62,13 @@ describe("pr inspect", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("returns raw reviewer identities in JSON mode", async () => {
+    install({ "repos pr reviewer list": { json: pullRequest.reviewers } });
+    const rendered = await run(["pr", "reviewers", "2613", "--json"]);
+
+    expect(JSON.parse(rendered)).toEqual(pullRequest.reviewers);
+  });
+
   it("fetches the independent sub-resources concurrently after resolving the PR", async () => {
     const mock = install(inspectRoutes());
     await run(["pr", "inspect", "2613"]);
